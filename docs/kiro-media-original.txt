@@ -1,0 +1,500 @@
+```javascript
+// Afterlight — Kiroween 2026 entry
+// Analog contact sheets for forgotten digital footage.
+// Browser ES module. No external dependencies.
+
+/* ── Constants ─────────────────────────────────────────── */
+
+const META_TIMEOUT = 20000;
+const SEEK_TIMEOUT = 20000;
+const MAX_FRAME_WIDTH = 480;
+const SAME_TIME_EPSILON = 0.001;
+const FRAME_JPEG_QUALITY = 0.9;
+const SHEET_JPEG_QUALITY = 0.92;
+
+/* ── Time formatting ───────────────────────────────────── */
+
+function formatTimestamp(seconds) {
+  const s = typeof seconds === 'number' && isFinite(seconds) ? seconds : 0;
+  const totalMs = Math.max(0, Math.round(s * 1000));
+  const h = Math.floor(totalMs / 3600000);
+  const m = Math.floor((totalMs % 3600000) / 60000);
+  const sec = Math.floor((totalMs % 60000) / 1000);
+  const ms = totalMs % 1000;
+  const pad = (n, l) => String(n).padStart(l, '0');
+  return `${pad(h, 2)}:${pad(m, 2)}:${pad(sec, 2)}.${pad(ms, 3)}`;
+}
+
+/* ── AbortError factory ────────────────────────────────── */
+
+function abortError() {
+  return new DOMException('The operation was aborted.', 'AbortError');
+}
+
+/* ── Text layout helpers ───────────────────────────────── */
+
+function truncateToWidth(ctx, text, maxWidth) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let t = text;
+  while (t.length > 0 && ctx.measureText(t + '\u2026').width > maxWidth) {
+    t = t.slice(0, -1);
+  }
+  return t.length > 0 ? t + '\u2026' : '';
+}
+
+function wrapToWidth(ctx, text, maxWidth, maxLines) {
+  if (!text || maxLines <= 0) return [];
+  if (ctx.measureText(text).width <= maxWidth) return [text];
+
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = '';
+  let idx = 0;
+
+  while (idx < words.length && lines.length < maxLines) {
+    const word = words[idx];
+    const candidate = current ? current + ' ' + word : word;
+
+    if (ctx.measureText(candidate).width <= maxWidth) {
+      current = candidate;
+      idx++;
+    } else if (current) {
+      // Word doesn't fit on current line — start a new one
+      lines.push(current);
+      current = '';
+      if (lines.length >= maxLines) break;
+    } else {
+      // Single word wider than maxWidth — truncate it
+      lines.push(truncateToWidth(ctx, word, maxWidth));
+      idx++;
+      if (lines.length >= maxLines) break;
+    }
+  }
+
+  if (current && lines.length < maxLines) lines.push(current);
+
+  // If words remain and we're at maxLines, truncate the last visible line
+  if (idx < words.length && lines.length === maxLines) {
+    const last = lines[maxLines - 1];
+    if (!last.endsWith('\u2026')) {
+      lines[maxLines - 1] = truncateToWidth(ctx, last, maxWidth);
+    }
+  }
+
+  return lines;
+}
+
+/* ── Image loading ────────────────────────────────────── */
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const fail = () => reject(new Error('Failed to decode frame image'));
+
+    if (typeof img.decode === 'function') {
+      img.onerror = fail;
+      img.src = src;
+      img.decode().then(() => resolve(img)).catch(fail);
+    } else {
+      img.onload = () => resolve(img);
+      img.onerror = fail;
+      img.src = src;
+    }
+  });
+}
+
+/* ── Video element lifecycle ──────────────────────────── */
+
+function createVideoElement(file) {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'metadata';
+  video.src = url;
+  return { video, url };
+}
+
+/**
+ * Wait for loadeddata (readyState >= 2) with a bounded timeout.
+ * Cleans up all listeners and timers regardless of outcome.
+ */
+function waitForLoadedData(video, signal) {
+  return new Promise((resolve, reject) => {
+    if (video.readyState >= 2) {
+      resolve();
+      return;
+    }
+
+    let settled = false;
+    let timer = null;
+
+    const settle = (action) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      video.removeEventListener('loadeddata', onLoaded);
+      video.removeEventListener('error', onError);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      action();
+    };
+
+    const onLoaded = () => settle(resolve);
+    const onError = () => settle(() => {
+      const e = video.error;
+      reject(new Error(
+        e ? `Video decode error (code ${e.code})` : 'Video decode error'
+      ));
+    });
+    const onAbort = () => settle(() => reject(abortError()));
+    const onTimeout = () => settle(() =>
+      reject(new Error('Timed out waiting for video data (20s)'))
+    );
+
+    video.addEventListener('loadeddata', onLoaded, { once: true });
+    video.addEventListener('error', onError, { once: true });
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    timer = setTimeout(onTimeout, META_TIMEOUT);
+  });
+}
+
+/**
+ * Seek to targetTime and wait for the seeked event.
+ * If already at the target (within epsilon), resolve immediately —
+ * the frame data is already loaded since loadeddata has fired.
+ */
+function seekToTime(video, targetTime, signal) {
+  return new Promise((resolve, reject) => {
+    if (Math.abs(video.currentTime - targetTime) < SAME_TIME_EPSILON) {
+      resolve();
+      return;
+    }
+
+    let settled = false;
+    let timer = null;
+
+    const settle = (action) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      video.removeEventListener('seeked', onSeeked);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      action();
+    };
+
+    const onSeeked = () => settle(resolve);
+    const onAbort = () => settle(() => reject(abortError()));
+    const onTimeout = () => settle(() => {
+      // Browser may have landed close despite no seeked event
+      if (Math.abs(video.currentTime - targetTime) < 0.1) resolve();
+      else reject(new Error(`Seek to ${targetTime}s timed out (20s)`));
+    });
+
+    video.addEventListener('seeked', onSeeked, { once: true });
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    timer = setTimeout(onTimeout, SEEK_TIMEOUT);
+
+    try {
+      video.currentTime = targetTime;
+    } catch (err) {
+      settle(() => reject(new Error(`Seek to ${targetTime}s failed: ${err.message}`)));
+    }
+  });
+}
+
+/**
+ * Draw the current decoded video frame to a canvas at max width 480,
+ * preserving aspect ratio. Returns a JPEG data URL.
+ */
+function captureFrame(video) {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh) throw new Error('Video has zero dimensions');
+
+  const scale = Math.min(1, MAX_FRAME_WIDTH / vw);
+  const cw = Math.max(1, Math.round(vw * scale));
+  const ch = Math.max(1, Math.round(vh * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = cw;
+  canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Failed to get 2D canvas context');
+  ctx.drawImage(video, 0, 0, cw, ch);
+
+  return canvas.toDataURL('image/jpeg', FRAME_JPEG_QUALITY);
+}
+
+/* ── Validation & computation ──────────────────────────── */
+
+function validateFrameCount(value) {
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    throw new Error('frameCount must be an integer');
+  }
+  return Math.min(24, Math.max(1, value));
+}
+
+function getValidDuration(duration) {
+  if (typeof duration !== 'number' || !isFinite(duration) || duration <= 0) {
+    return null;
+  }
+  return duration;
+}
+
+/** Uniformly distributed interior positions: duration * (i + 0.5) / count */
+function computeSeekPositions(duration, count) {
+  const positions = [];
+  for (let i = 0; i < count; i++) {
+    positions.push(duration * (i + 0.5) / count);
+  }
+  return positions;
+}
+
+/* ── Exports ───────────────────────────────────────────── */
+
+/**
+ * Inspect a video file: read metadata and extract representative frames.
+ *
+ * @param {Blob|File} file - The video file to inspect.
+ * @param {Object}   opts
+ * @param {AbortSignal} opts.signal    - Abort the operation.
+ * @param {Function} opts.onProgress   - Called with {completed,total} after each frame.
+ * @param {number}   opts.frameCount=12 - Number of frames to extract (1..24).
+ * @returns {Promise<{duration:number,width:number,height:number,
+ *                     frames:Array<{time:number,image:string}>,poster:string}>}
+ */
+export async function inspectVideo(file, { signal, onProgress, frameCount = 12 } = {}) {
+  if (!file) throw new Error('file is required (Blob or File)');
+  const count = validateFrameCount(frameCount);
+
+  const { video, url } = createVideoElement(file);
+
+  try {
+    if (signal?.aborted) throw abortError();
+
+    // Wait for the browser to decode at least one frame
+    await waitForLoadedData(video, signal);
+
+    // Duration must be finite and positive
+    const duration = getValidDuration(video.duration);
+    if (duration === null) {
+      throw new Error(`Invalid video duration: ${video.duration}`);
+    }
+
+    // Non-zero dimensions indicate the codec was actually decoded
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (!width || !height) {
+      throw new Error('Video has zero dimensions (unsupported codec?)');
+    }
+
+    // Seek to interior positions, draw each decoded frame
+    const positions = computeSeekPositions(duration, count);
+    const frames = [];
+    let poster = null;
+
+    for (let i = 0; i < positions.length; i++) {
+      if (signal?.aborted) throw abortError();
+
+      await seekToTime(video, positions[i], signal);
+      const image = captureFrame(video);
+      frames.push({ time: positions[i], image });
+      if (i === 0) poster = image;
+
+      if (typeof onProgress === 'function') {
+        onProgress({ completed: i + 1, total: count });
+      }
+    }
+
+    return { duration, width, height, frames, poster };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/**
+ * Extract a single frame at a specific timestamp.
+ *
+ * @param {Blob|File} file - The video file.
+ * @param {number}   time  - Seek target in seconds (clamped to [0, duration]).
+ * @param {Object}   opts
+ * @param {AbortSignal} opts.signal - Abort the operation.
+ * @returns {Promise<{time:number,image:string}>}
+ */
+export async function extractFrame(file, time, { signal } = {}) {
+  if (!file) throw new Error('file is required (Blob or File)');
+
+  const { video, url } = createVideoElement(file);
+
+  try {
+    if (signal?.aborted) throw abortError();
+
+    await waitForLoadedData(video, signal);
+
+    const duration = getValidDuration(video.duration);
+    if (duration === null) {
+      throw new Error(`Invalid video duration: ${video.duration}`);
+    }
+
+    if (!video.videoWidth || !video.videoHeight) {
+      throw new Error('Video has zero dimensions (unsupported codec?)');
+    }
+
+    // Clamp to valid range — returned time represents the actual seek target
+    const clampedTime = Math.max(0, Math.min(time, duration));
+    await seekToTime(video, clampedTime, signal);
+
+    const image = captureFrame(video);
+    return { time: clampedTime, image };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/**
+ * Generate a printable 3-column contact sheet from decoded frames.
+ *
+ * @param {Object} clip - Contains name/fileName/title, duration, and frames[].
+ * @param {Object} opts
+ * @param {string} opts.title - User-provided title for the header.
+ * @returns {Promise<Blob>} JPEG image blob.
+ */
+export async function makeContactSheet(clip, { title } = {}) {
+  if (!clip || !Array.isArray(clip.frames) || clip.frames.length === 0) {
+    throw new Error('clip must contain a non-empty frames array');
+  }
+
+  // Decode all frame images before drawing anything
+  const frameData = [];
+  for (let i = 0; i < clip.frames.length; i++) {
+    const f = clip.frames[i];
+    if (!f || !f.image) {
+      throw new Error(`Frame ${i} is missing image data`);
+    }
+    try {
+      const img = await loadImage(f.image);
+      frameData.push({ time: f.time, image: img });
+    } catch (err) {
+      throw new Error(`Failed to decode frame ${i}: ${err.message}`);
+    }
+  }
+
+  /* ── Layout constants ──────────────────────────────── */
+  const PAD = 48;
+  const CANVAS_W = 1800;
+  const COLS = 3;
+  const CELL_W = 540;
+  const CELL_H = 304;
+  const CAPTION_H = 44;
+  const COL_GAP = (CANVAS_W - 2 * PAD - COLS * CELL_W) / (COLS - 1); // 42
+  const ROW_GAP = 42;
+  const rows = Math.ceil(frameData.length / COLS);
+
+  /* ── Palette ───────────────────────────────────────── */
+  const BG = '#0f1e2e';       // dark navy
+  const HEADER_CLR = '#f0e6d2'; // warm off-white
+  const SUB_CLR = '#c0b69a';    // dimmer warm
+  const AMBER = '#e8a838';      // amber
+  const CELL_BG = '#162638';    // slightly lighter navy
+  const BORDER = '#2a3f5f';     // subtle border
+
+  /* ── Header text ───────────────────────────────────── */
+  const headerTitle = title || clip.title || clip.name || clip.fileName || 'Untitled';
+  const fileName = clip.fileName || clip.name || 'unknown';
+  const durationText = (typeof clip.duration === 'number' &&
+    isFinite(clip.duration) && clip.duration > 0)
+    ? formatTimestamp(clip.duration)
+    : '\u2014'; // em dash
+  const subtitle = `${fileName}  \u00b7  ${durationText}`;
+
+  /* ── Fonts ─────────────────────────────────────────── */
+  const TITLE_FONT = 'bold 44px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+  const SUB_FONT = '24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+  const TS_FONT = '19px "SF Mono", "Cascadia Code", Consolas, "Courier New", monospace';
+
+  /* ── Create canvas (need context for text measurement) ─ */
+  const canvas = document.createElement('canvas');
+  canvas.width = CANVAS_W;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Failed to get 2D canvas context');
+
+  // Measure header to compute total canvas height
+  ctx.font = TITLE_FONT;
+  const titleLines = wrapToWidth(ctx, headerTitle, CANVAS_W - 2 * PAD, 2);
+  const TITLE_LH = 54;
+  const SUB_LH = 36;
+  const headerContentH = titleLines.length * TITLE_LH + 12 + SUB_LH;
+  const gridTop = PAD + headerContentH + ROW_GAP;
+  const gridH = rows * (CELL_H + CAPTION_H) + (rows - 1) * ROW_GAP;
+  const totalH = gridTop + gridH + PAD;
+  canvas.height = totalH;
+
+  /* ── Draw background ────────────────────────────────── */
+  ctx.fillStyle = BG;
+  ctx.fillRect(0, 0, CANVAS_W, totalH);
+
+  /* ── Draw header ────────────────────────────────────── */
+  ctx.textBaseline = 'top';
+
+  ctx.fillStyle = HEADER_CLR;
+  ctx.font = TITLE_FONT;
+  let y = PAD;
+  for (const line of titleLines) {
+    ctx.fillText(line, PAD, y);
+    y += TITLE_LH;
+  }
+
+  y += 4;
+  ctx.fillStyle = SUB_CLR;
+  ctx.font = SUB_FONT;
+  ctx.fillText(truncateToWidth(ctx, subtitle, CANVAS_W - 2 * PAD), PAD, y);
+
+  // Separator line
+  y += SUB_LH + 8;
+  ctx.strokeStyle = BORDER;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(PAD, y);
+  ctx.lineTo(CANVAS_W - PAD, y);
+  ctx.stroke();
+
+  /* ── Draw frame grid ────────────────────────────────── */
+  for (let i = 0; i < frameData.length; i++) {
+    const col = i % COLS;
+    const row = Math.floor(i / COLS);
+    const x = PAD + col * (CELL_W + COL_GAP);
+    const cellY = gridTop + row * (CELL_H + CAPTION_H + ROW_GAP);
+
+    // Cell background
+    ctx.fillStyle = CELL_BG;
+    ctx.fillRect(x, cellY, CELL_W, CELL_H);
+
+    // Cell border (offset 0.5px for crisp 1px line)
+    ctx.strokeStyle = BORDER;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, cellY + 0.5, CELL_W - 1, CELL_H - 1);
+
+    // Frame image — contained within cell, centered, aspect ratio preserved
+    const img = frameData[i].image;
+    const scale = Math.min(CELL_W / img.width, CELL_H / img.height);
+    const dw = Math.max(1, Math.round(img.width * scale));
+    const dh = Math.max(1, Math.round(img.height * scale));
+    const dx = x + Math.round((CELL_W - dw) / 2);
+    const dy = cellY + Math.round((CELL_H - dh) / 2);
+    ctx.drawImage(img, dx, dy, dw, dh);
+
+    // Caption — timestamp in amber
+    ctx.fillStyle = AMBER;
+    ctx.font = TS_FONT;
+    ctx.fillText(formatTimestamp(frameData[i].time), x + 2, cellY + CELL_H + 14);
+  }
+
+  /* ── Export as JPEG blob ─────────────────────────────── */
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) reject(new Error('Failed to generate image blob from canvas'));
+      else resolve(blob);
+    }, 'image/jpeg', SHEET_JPEG_QUALITY);
+  });
+}
+```
