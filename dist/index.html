@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#ede9e0" />
+    <meta
+      name="description"
+      content="A contact sheet for the footage you forgot. Browse local videos, find your frames, and make a paper edit."
+    />
+    <title>Afterlight — Find the film you left behind.</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="logo" href="#"
+        ><span class="logo-mark" aria-hidden="true">a</span>afterlight</a
+      >
+      <div class="top-context">
+        <span class="tiny-led"></span> YOUR FOOTAGE, IN A NEW LIGHT
+      </div>
+      <div class="top-actions">
+        <span id="save-status" role="status">Opening workspace…</span
+        ><button class="icon-button" id="help" aria-label="About Afterlight">
+          ?
+        </button>
+      </div>
+    </header>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="project-head">
+          <span class="eyebrow">THE EDITING ROOM</span
+          ><button id="rename" title="Rename collection">
+            <span id="project-title">Untitled collection</span> ↗
+          </button>
+        </div>
+        <nav aria-label="Workspace">
+          <button class="nav active" data-view="library">
+            <span>▦</span> Contact sheets <b id="clip-count">0</b></button
+          ><button class="nav" data-view="favorites">
+            <span>☆</span> Starred clips <b id="star-count">0</b></button
+          ><button class="nav" data-view="edit">
+            <span>≡</span> Paper edit <b id="cut-count">0</b>
+          </button>
+        </nav>
+        <div class="sidebar-rule"></div>
+        <div class="eyebrow">LABELS</div>
+        <div class="label-filters">
+          <button data-filter="all" class="selected">All footage</button
+          ><button data-filter="amber">
+            <i class="label-dot amber"></i> Establishing</button
+          ><button data-filter="blue">
+            <i class="label-dot blue"></i> Detail</button
+          ><button data-filter="green">
+            <i class="label-dot green"></i> Character</button
+          ><button data-filter="rose">
+            <i class="label-dot rose"></i> Atmosphere
+          </button>
+        </div>
+        <div class="sidebar-bottom">
+          <div class="archive-symbol" aria-hidden="true">▧</div>
+          <strong>A second life for your footage.</strong>
+          <p>
+            Inspired by the analog contact sheet. Built for the stories still on
+            your hard drive.
+          </p>
+          <button id="load-demo" class="text-button">
+            Explore the sample film <span>↗</span>
+          </button>
+          <div class="local-note">
+            LOCAL PROCESSING <span>●</span><br />Your videos stay on your
+            device.
+          </div>
+        </div>
+      </aside>
+      <main id="main">
+        <section class="intro">
+          <div class="intro-copy">
+            <div class="eyebrow orange">THE CONTACT SHEET, REIMAGINED</div>
+            <h1>Find the film<br />you <em>left behind.</em></h1>
+            <p>
+              See a whole shoot at a glance. Find the moments worth keeping.<br />Turn
+              a forgotten folder into your next story.
+            </p>
+            <div class="intro-buttons">
+              <button class="button primary" id="import-main">
+                + Import footage</button
+              ><button class="button ghost" id="intro-demo">
+                Open sample collection ↗
+              </button>
+            </div>
+            <p class="file-hint">
+              Video files · Local processing · No account needed
+            </p>
+          </div>
+          <div class="intro-visual">
+            <div class="photo-stack back"></div>
+            <div class="photo-stack middle"></div>
+            <div class="photo-stack front">
+              <img
+                src="assets/cinema.jpg"
+                alt="A quiet seaside cinema at blue hour, from the generated sample film"
+              />
+              <div><span>THE LAST SCREENING</span><span>01 / 03</span></div>
+            </div>
+            <span class="visual-caption">EVERY FRAME HAS AN AFTERLIFE.</span>
+          </div>
+        </section>
+        <section
+          id="import-progress"
+          class="progress-panel"
+          hidden
+          role="status"
+        >
+          <div>
+            <strong id="progress-title">Reading footage</strong
+            ><span id="progress-text"></span>
+          </div>
+          <progress id="progress-bar" max="1" value="0"></progress
+          ><button id="cancel-import" class="text-button">Cancel</button>
+        </section>
+        <section class="collection">
+          <div class="collection-heading">
+            <div>
+              <span class="eyebrow" id="collection-kicker"
+                >ON YOUR LIGHT TABLE</span
+              >
+              <h2 id="view-title">The collection<span>.</span></h2>
+            </div>
+            <div class="collection-actions">
+              <button id="backup-import" class="button subtle">
+                Restore project</button
+              ><button id="export-open" class="button subtle">Export ↗</button
+              ><button id="import-more" class="button primary">
+                + Add footage
+              </button>
+            </div>
+          </div>
+          <div class="toolbar">
+            <label class="search"
+              ><span aria-hidden="true">⌕</span
+              ><input
+                id="search"
+                type="search"
+                aria-label="Search footage"
+                placeholder="Search filenames and notes"
+            /></label>
+            <div class="toolbar-end">
+              <span id="summary">0 clips</span
+              ><label class="sort-label"
+                >Sort<select id="sort">
+                  <option value="added">Recently added</option>
+                  <option value="name">Filename</option>
+                  <option value="duration">Duration</option>
+                </select></label
+              >
+            </div>
+          </div>
+          <div id="content"></div>
+        </section>
+        <footer>
+          <span>Less searching. More seeing.</span
+          ><span>AFTERLIGHT · A LOCAL FILM ARCHIVE</span>
+        </footer>
+      </main>
+    </div>
+    <input
+      type="file"
+      id="video-files"
+      accept="video/*,.mov,.mkv,.m4v"
+      multiple
+      hidden
+    /><input
+      type="file"
+      id="project-file"
+      accept=".json,application/json"
+      hidden
+    />
+    <dialog id="clip-dialog" aria-labelledby="clip-heading">
+      <div class="dialog-top">
+        <div>
+          <span class="eyebrow">SOURCE VIEWER</span>
+          <h2 id="clip-heading"></h2>
+        </div>
+        <button class="close" data-close aria-label="Close source viewer">
+          ×
+        </button>
+      </div>
+      <div class="viewer-grid">
+        <div class="viewer-main">
+          <div class="player-wrap">
+            <video id="player" controls playsinline preload="metadata"></video>
+            <div id="relink-panel" hidden>
+              <img id="offline-poster" alt="Saved contact frame" />
+              <div>
+                <strong>Bring the original back.</strong>
+                <p>
+                  Your contact sheet is saved. Relink the source video to play
+                  or refine a selection.
+                </p>
+                <button class="button primary" id="relink">
+                  Relink original file
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="player-meta">
+            <span id="source-meta"></span
+            ><button id="save-sheet" class="text-button">
+              Save contact sheet JPG ↓
+            </button>
+          </div>
+          <div id="viewer-frames" class="viewer-frames"></div>
+        </div>
+        <aside class="inspector">
+          <div class="inspector-heading">
+            <span class="eyebrow">MAKE IT YOURS</span
+            ><button id="favorite" class="star-button">☆ Star clip</button>
+          </div>
+          <label
+            >Color label<select id="clip-label">
+              <option value="none">No label</option>
+              <option value="amber">Establishing</option>
+              <option value="blue">Detail</option>
+              <option value="green">Character</option>
+              <option value="rose">Atmosphere</option>
+            </select></label
+          ><label
+            >Clip notes<textarea
+              id="clip-note"
+              maxlength="4000"
+              rows="4"
+              placeholder="A look, a movement, a possible opening…"
+            ></textarea>
+          </label>
+          <div class="inspector-divider"></div>
+          <span class="eyebrow">SELECT A MOMENT</span>
+          <p class="instruction">
+            Set source times in seconds, or mark the playhead with I and O.
+          </p>
+          <div class="range-inputs">
+            <label
+              >In<input
+                id="range-in"
+                type="number"
+                min="0"
+                step="0.001"
+              /><button id="mark-in" class="text-button">
+                Mark playhead [I]
+              </button></label
+            ><label
+              >Out<input
+                id="range-out"
+                type="number"
+                min="0"
+                step="0.001"
+              /><button id="mark-out" class="text-button">
+                Mark playhead [O]
+              </button></label
+            >
+          </div>
+          <label
+            >Selection note<textarea
+              id="cut-note"
+              rows="2"
+              maxlength="2000"
+              placeholder="Why this moment belongs in the story"
+            ></textarea></label
+          ><button class="button primary wide" id="add-cut">
+            + Add to paper edit
+          </button>
+          <p id="range-message" role="status"></p>
+          <button id="remove-clip" class="text-button danger">
+            Remove clip from collection
+          </button>
+        </aside>
+      </div>
+    </dialog>
+    <dialog id="export-dialog" aria-labelledby="export-title">
+      <div class="dialog-top">
+        <div>
+          <span class="eyebrow">TAKE THE STORY WITH YOU</span>
+          <h2 id="export-title">Out of the darkroom.</h2>
+        </div>
+        <button class="close" data-close aria-label="Close export">×</button>
+      </div>
+      <div class="export-options">
+        <button data-export="html">
+          <strong>Contact sheets <span>HTML ↗</span></strong>
+          <p>
+            All sampled frames, timestamps, and clip notes. Opens offline and
+            prints to PDF.
+          </p></button
+        ><button data-export="csv">
+          <strong>Source cut list <span>CSV ↗</span></strong>
+          <p>
+            Ordered in/out points and notes for your editing workflow.
+          </p></button
+        ><button data-export="md">
+          <strong>Paper edit <span>MARKDOWN ↗</span></strong>
+          <p>
+            A readable, ordered story outline with exact source times.
+          </p></button
+        ><button data-export="json">
+          <strong>Project backup <span>JSON ↗</span></strong>
+          <p>
+            Contact frames, notes, and selections. Relink original videos when
+            you reopen.
+          </p>
+        </button>
+      </div>
+      <p class="small">
+        Exports contain your chosen media filenames, thumbnails, and notes.
+        Original video files stay on your device.
+      </p>
+    </dialog>
+    <dialog id="name-dialog" aria-labelledby="name-title">
+      <form id="name-form">
+        <div class="dialog-top">
+          <h2 id="name-title">Name this collection.</h2>
+          <button
+            class="close"
+            data-close
+            type="button"
+            aria-label="Close rename"
+          >
+            ×
+          </button>
+        </div>
+        <label
+          >Collection name<input
+            id="name-input"
+            required
+            maxlength="100" /></label
+        ><button class="button primary wide" type="submit">
+          Save collection name
+        </button>
+      </form>
+    </dialog>
+    <dialog id="help-dialog" aria-labelledby="help-title">
+      <div class="dialog-top">
+        <div>
+          <span class="eyebrow">AN OLD IDEA. A NEW LIFE.</span>
+          <h2 id="help-title">Welcome to the light table.</h2>
+        </div>
+        <button class="close" data-close aria-label="Close guide">×</button>
+      </div>
+      <div class="help-copy">
+        <h3>See the whole roll.</h3>
+        <p>
+          Photographers once printed an entire roll on a single sheet to see the
+          story between frames. Afterlight brings that workflow to digital
+          video. Each clip is sampled at 12 evenly spaced times.
+        </p>
+        <h3>Make a paper edit.</h3>
+        <p>
+          Open a clip, click any frame to seek, mark in and out, and leave a
+          note. Order your selections in Paper edit. Source times are measured
+          in seconds, with millisecond display precision.
+        </p>
+        <h3>Your files stay local.</h3>
+        <p>
+          The browser decodes your video. We save contact images, notes and
+          ranges in this browser. Reloading releases your original files. Add
+          the same files again to relink them and continue editing.
+        </p>
+        <h3>Keep a copy.</h3>
+        <p>
+          Export a project backup before clearing browser storage. Use one
+          editing tab at a time. Up to 60 clips, 500 selections and 2 GB per
+          file are supported. Codec support depends on your browser. H.264 MP4
+          and VP9 WebM are recommended.
+        </p>
+        <h3>About the sample.</h3>
+        <p>
+          The Last Screening is a three-clip demonstration made from an original
+          AI-generated photograph with camera motion. The app processes those
+          MP4 files through the same import pipeline as your footage.
+        </p>
+      </div>
+    </dialog>
+    <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">Confirm change</h2>
+      <p id="confirm-copy"></p>
+      <div class="confirm-actions">
+        <button id="confirm-no" class="button subtle">Keep current</button
+        ><button id="confirm-yes" class="button primary">Continue</button>
+      </div>
+    </dialog>
+    <div class="drop-overlay" id="drop-overlay" hidden>
+      <span>Bring your footage into the light.</span>
+      <p>Drop video files to create contact sheets.</p>
+    </div>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <noscript>Enable JavaScript to use the local video workspace.</noscript>
+  </body>
+</html>
